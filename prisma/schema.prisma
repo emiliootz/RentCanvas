@@ -62,7 +62,8 @@ enum EntryPermission {
 
 model User {
   id        String   @id @default(cuid())
-  clerkId   String   @unique
+  // Null until an invited tenant accepts and creates their Clerk account
+  clerkId   String?  @unique
   email     String   @unique
   role      UserRole @default(tenant)
   createdAt DateTime @default(now())

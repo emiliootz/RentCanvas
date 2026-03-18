@@ -1,9 +1,9 @@
-// Admin group layout – adds the admin sidebar.
-// Role enforcement (admin-only) happens inside this layout via server auth.
+// Admin group layout – enforces admin role via server-side DB check.
+// Middleware already requires the user to be signed in; this layout additionally
+// verifies they have the admin role. Non-admins are redirected to /dashboard.
 
-import { auth } from "@clerk/nextjs/server";
+import { getCurrentUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
 import AdminSidebar from "@/components/layout/AdminSidebar";
 import TopBar from "@/components/layout/TopBar";
 
@@ -12,22 +12,13 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { userId } = await auth();
+  const user = await getCurrentUser();
 
-  if (!userId) {
-    redirect("/sign-in");
-  }
+  // Not in DB at all (not invited/bootstrapped) → send to auth-redirect to handle
+  if (!user) redirect("/auth-redirect");
 
-  // Verify the signed-in user has the admin role in our database
-  const user = await prisma.user.findUnique({
-    where: { clerkId: userId },
-    select: { role: true },
-  });
-
-  if (!user || user.role !== "admin") {
-    // Signed in but not an admin – redirect to tenant dashboard
-    redirect("/dashboard");
-  }
+  // Signed in but not an admin → send to tenant dashboard
+  if (user.role !== "admin") redirect("/dashboard");
 
   return (
     <div className="d-flex">
