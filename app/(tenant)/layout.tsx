@@ -1,14 +1,22 @@
-// Tenant group layout – adds the sidebar nav for the tenant portal.
-// Auth check is handled by middleware; this layout assumes the user is signed in.
+// Tenant group layout – verifies the user is a signed-in tenant.
+// Admins who navigate here are redirected to /admin.
+// Unrecognized users (not invited) are sent to /auth-redirect.
 
+import { getCurrentUser } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import TenantSidebar from "@/components/layout/TenantSidebar";
 import TopBar from "@/components/layout/TopBar";
 
-export default function TenantLayout({
+export default async function TenantLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const user = await getCurrentUser();
+
+  if (!user) redirect("/auth-redirect");
+  if (user.role === "admin") redirect("/admin");
+
   return (
     <div className="d-flex">
       <TenantSidebar />
