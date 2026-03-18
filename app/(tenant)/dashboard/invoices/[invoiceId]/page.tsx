@@ -1,5 +1,6 @@
 // Tenant – Invoice detail page
-// Shows line items, payment history, and a "Pay Now" CTA (Phase 3 will wire Stripe).
+// Shows line items, payment history, and a "Pay Now" CTA.
+// Accepts ?payment=processing to show a confirmation banner after submission.
 
 import { requireTenant } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -10,11 +11,15 @@ import InvoiceStatusBadge from "@/components/ui/InvoiceStatusBadge";
 
 export default async function InvoiceDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ invoiceId: string }>;
+  searchParams: Promise<{ payment?: string }>;
 }) {
   const user = await requireTenant();
   const { invoiceId } = await params;
+  const { payment } = await searchParams;
+  const isProcessing = payment === "processing";
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
@@ -25,7 +30,7 @@ export default async function InvoiceDetailPage({
     },
   });
 
-  // Ensure the invoice belongs to this tenant (security: don't expose other tenants' invoices)
+  // Ensure the invoice belongs to this tenant
   if (!invoice || invoice.tenantProfileId !== user.tenantProfile.id) {
     notFound();
   }
@@ -34,6 +39,17 @@ export default async function InvoiceDetailPage({
 
   return (
     <div style={{ maxWidth: 680 }}>
+      {/* Processing confirmation banner */}
+      {isProcessing && (
+        <div className="alert alert-success d-flex align-items-start gap-2 mb-4">
+          <div>
+            <strong>Payment submitted!</strong> Your ACH payment is being
+            processed and typically settles in 2–3 business days. You&apos;ll
+            receive a receipt once it clears.
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="d-flex align-items-start justify-content-between mb-4">
         <div>
@@ -89,8 +105,8 @@ export default async function InvoiceDetailPage({
         </table>
       </div>
 
-      {/* Pay Now CTA – Stripe integration in Phase 3 */}
-      {canPay && (
+      {/* Pay Now CTA */}
+      {canPay && !isProcessing && (
         <div className="alert alert-warning d-flex align-items-center justify-content-between gap-3 mb-3">
           <div>
             <strong>{formatCurrency(invoice.balance)}</strong> due by{" "}
@@ -114,14 +130,28 @@ export default async function InvoiceDetailPage({
               <tr>
                 <th className="ps-3 py-2 small fw-semibold text-muted">Date</th>
                 <th className="py-2 small fw-semibold text-muted">Method</th>
+                <th className="py-2 small fw-semibold text-muted">Status</th>
                 <th className="pe-3 py-2 small fw-semibold text-muted text-end">Amount</th>
               </tr>
             </thead>
             <tbody>
               {invoice.payments.map((pmt) => (
                 <tr key={pmt.id}>
-                  <td className="ps-3 py-2 small">{formatDate(pmt.paidAt ?? pmt.createdAt)}</td>
+                  <td className="ps-3 py-2 small">
+                    {formatDate(pmt.paidAt ?? pmt.createdAt)}
+                  </td>
                   <td className="py-2 small text-uppercase">{pmt.method}</td>
+                  <td className="py-2 small">
+                    {pmt.stripeStatus === "processing" ? (
+                      <span className="badge bg-warning text-dark">Processing</span>
+                    ) : pmt.stripeStatus === "succeeded" ? (
+                      <span className="badge bg-success">Confirmed</span>
+                    ) : pmt.stripeStatus === "failed" ? (
+                      <span className="badge bg-danger">Failed</span>
+                    ) : (
+                      <span className="badge bg-secondary">{pmt.stripeStatus ?? "—"}</span>
+                    )}
+                  </td>
                   <td className="pe-3 py-2 small text-end text-success fw-semibold">
                     {formatCurrency(pmt.amount)}
                   </td>
