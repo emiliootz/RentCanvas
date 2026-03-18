@@ -1,2 +1,2 @@
-# Rent Canvas
+# unit-pay
 A minimal web application for landlords

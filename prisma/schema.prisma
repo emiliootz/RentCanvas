@@ -1,0 +1,355 @@
+// =============================================================================
+// RentCanvas – Prisma Schema
+// =============================================================================
+// Design decisions:
+//  - Users are identified by Clerk (clerkId). The User record here mirrors
+//    the Clerk user and stores the app-level role.
+//  - Balances/invoice responsibility live at the LeaseParticipant level so
+//    multiple tenants in one unit each owe their own portion.
+//  - A single Property with multiple Units is assumed for this MVP.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  admin
+  tenant
+}
+
+enum InvoiceStatus {
+  draft
+  open
+  partially_paid
+  paid
+  void
+}
+
+enum MaintenanceStatus {
+  open
+  in_review
+  scheduled
+  completed
+  closed
+}
+
+enum MaintenanceUrgency {
+  low
+  normal
+  high
+  emergency
+}
+
+enum EntryPermission {
+  may_enter
+  contact_first
+  no_entry_without_presence
+}
+
+// ---------------------------------------------------------------------------
+// User – mirrors a Clerk user; stores app-level role
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  role      UserRole @default(tenant)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantProfile TenantProfile?
+  adminProfile  AdminProfile?
+}
+
+// ---------------------------------------------------------------------------
+// TenantProfile – extra data for tenant users
+// ---------------------------------------------------------------------------
+
+model TenantProfile {
+  id               String  @id @default(cuid())
+  userId           String  @unique
+  firstName        String
+  lastName         String
+  phone            String?
+  // Stripe customer ID for this tenant (used to attach bank accounts + payments)
+  stripeCustomerId String? @unique
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaseParticipants LeaseParticipant[]
+  invoices          Invoice[]
+  payments          Payment[]
+  maintenanceRequests MaintenanceRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// AdminProfile – extra data for the landlord/admin user
+// ---------------------------------------------------------------------------
+
+model AdminProfile {
+  id        String @id @default(cuid())
+  userId    String @unique
+  firstName String
+  lastName  String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Property – one property for this MVP
+// ---------------------------------------------------------------------------
+
+model Property {
+  id      String @id @default(cuid())
+  name    String
+  address String
+  city    String
+  state   String
+  zip     String
+
+  units Unit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Unit – one of the 3 units in the property
+// ---------------------------------------------------------------------------
+
+model Unit {
+  id         String @id @default(cuid())
+  propertyId String
+  unitNumber String // e.g. "1A", "2B", "3"
+  bedrooms   Int?
+  bathrooms  Float?
+  sqft       Int?
+
+  property Property @relation(fields: [propertyId], references: [id])
+  leases   Lease[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([propertyId, unitNumber])
+}
+
+// ---------------------------------------------------------------------------
+// Lease – covers a unit for a date range; total rent is split among participants
+// ---------------------------------------------------------------------------
+
+model Lease {
+  id          String    @id @default(cuid())
+  unitId      String
+  startDate   DateTime
+  endDate     DateTime?
+  isActive    Boolean   @default(true)
+  // Total monthly rent for the unit – individual shares are on LeaseParticipant
+  monthlyRent Float
+
+  unit         Unit               @relation(fields: [unitId], references: [id])
+  participants LeaseParticipant[]
+  documents    LeaseDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// LeaseParticipant – joins a tenant to a lease with their specific rent share.
+// This is where per-tenant balance responsibility lives.
+// ---------------------------------------------------------------------------
+
+model LeaseParticipant {
+  id              String  @id @default(cuid())
+  leaseId         String
+  tenantProfileId String
+  // This tenant's fixed monthly rent amount (may differ from others on same lease)
+  rentShare       Float
+  isActive        Boolean @default(true)
+
+  lease         Lease         @relation(fields: [leaseId], references: [id])
+  tenantProfile TenantProfile @relation(fields: [tenantProfileId], references: [id])
+  invoices      Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([leaseId, tenantProfileId])
+}
+
+// ---------------------------------------------------------------------------
+// Invoice – one invoice per tenant per billing period
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id                 String        @id @default(cuid())
+  tenantProfileId    String
+  leaseParticipantId String
+  invoiceNumber      String        @unique // e.g. "INV-2024-001"
+  dueDate            DateTime
+  periodStart        DateTime      // Billing period start
+  periodEnd          DateTime      // Billing period end
+  subtotal           Float         // Sum of line items
+  adjustments        Float         @default(0) // Credits (negative) or extra charges (positive)
+  total              Float         // subtotal + adjustments
+  amountPaid         Float         @default(0)
+  balance            Float         // total - amountPaid; updated on each payment
+  status             InvoiceStatus @default(draft)
+  // Stripe invoice ID if we create one on the Stripe side
+  stripeInvoiceId    String?       @unique
+
+  tenantProfile    TenantProfile    @relation(fields: [tenantProfileId], references: [id])
+  leaseParticipant LeaseParticipant @relation(fields: [leaseParticipantId], references: [id])
+  lines            InvoiceLine[]
+  payments         Payment[]
+  receipts         Receipt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// InvoiceLine – line items on an invoice (rent, one-time charges, etc.)
+// ---------------------------------------------------------------------------
+
+model InvoiceLine {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  amount      Float
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Payment – a single payment transaction applied against an invoice
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id              String    @id @default(cuid())
+  tenantProfileId String
+  invoiceId       String
+  amount          Float
+  method          String    @default("ach") // Only ACH for v1
+  // Stripe PaymentIntent or Charge ID
+  stripePaymentId String?   @unique
+  stripeStatus    String?   // mirrors Stripe's payment status
+  paidAt          DateTime?
+
+  tenantProfile TenantProfile @relation(fields: [tenantProfileId], references: [id])
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
+  receipt       Receipt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Receipt – generated after a payment is confirmed; stored for tenant records
+// ---------------------------------------------------------------------------
+
+model Receipt {
+  id            String   @id @default(cuid())
+  paymentId     String   @unique
+  invoiceId     String
+  receiptNumber String   @unique // e.g. "RCP-2024-001"
+  amount        Float
+  issuedAt      DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// LeaseDocument – PDF/files uploaded by the landlord for a lease
+// ---------------------------------------------------------------------------
+
+model LeaseDocument {
+  id       String  @id @default(cuid())
+  leaseId  String
+  name     String  // Display name, e.g. "Signed Lease Agreement"
+  fileUrl  String  // URL to the stored file (local or cloud)
+  fileSize Int?    // bytes
+  mimeType String?
+
+  lease Lease @relation(fields: [leaseId], references: [id])
+
+  uploadedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// MaintenanceRequest – submitted by tenants; managed by admin
+// ---------------------------------------------------------------------------
+
+model MaintenanceRequest {
+  id              String             @id @default(cuid())
+  tenantProfileId String
+  category        String             // e.g. "Plumbing", "HVAC", "Appliance"
+  description     String
+  urgency         MaintenanceUrgency @default(normal)
+  entryPermission EntryPermission    @default(may_enter)
+  status          MaintenanceStatus  @default(open)
+  adminNotes      String?            // Internal notes from landlord
+  scheduledDate   DateTime?          // When work is scheduled
+  completedAt     DateTime?
+
+  tenantProfile TenantProfile    @relation(fields: [tenantProfileId], references: [id])
+  photos        MaintenancePhoto[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// MaintenancePhoto – photos attached to a maintenance request
+// ---------------------------------------------------------------------------
+
+model MaintenancePhoto {
+  id                   String @id @default(cuid())
+  maintenanceRequestId String
+  fileUrl              String
+  fileName             String?
+  fileSize             Int?
+
+  maintenanceRequest MaintenanceRequest @relation(fields: [maintenanceRequestId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// NotificationLog – audit trail for emails/notifications sent by the system
+// ---------------------------------------------------------------------------
+
+model NotificationLog {
+  id        String   @id @default(cuid())
+  type      String   // "email", "webhook", etc.
+  recipient String   // email address or endpoint
+  subject   String?
+  body      String?
+  status    String   // "sent", "failed", "pending"
+  error     String?  // Error message if status is "failed"
+
+  createdAt DateTime @default(now())
+}

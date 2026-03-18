@@ -1,0 +1,38 @@
+/* =============================================================================
+   RentCanvas – Global Styles
+   Bootstrap handles most styling; this file contains only app-specific overrides.
+============================================================================= */
+
+/* Slightly softer background for the dashboard shell */
+body {
+  background-color: #f8f9fa;
+}
+
+/* Sidebar width consistency */
+.sidebar {
+  width: 240px;
+  min-height: 100vh;
+  flex-shrink: 0;
+}
+
+/* Make the main content area fill available width next to sidebar */
+.main-content {
+  flex: 1;
+  min-width: 0; /* prevents flex overflow */
+  padding: 2rem;
+}
+
+/* Badge-like status pills used on invoices and maintenance requests */
+.status-badge {
+  font-size: 0.75rem;
+  padding: 0.3em 0.7em;
+  border-radius: 999px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+/* Urgency color overrides for maintenance cards */
+.urgency-emergency { background-color: #f8d7da; color: #842029; }
+.urgency-high      { background-color: #fff3cd; color: #664d03; }
+.urgency-normal    { background-color: #d1ecf1; color: #0c5460; }
+.urgency-low       { background-color: #d4edda; color: #155724; }
