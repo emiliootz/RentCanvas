@@ -6,8 +6,14 @@ import { formatCurrency, formatDate, fullName } from "@/lib/utils";
 import Link from "next/link";
 import InvoiceStatusBadge from "@/components/ui/InvoiceStatusBadge";
 
-export default async function AdminInvoicesPage() {
+export default async function AdminInvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ generated?: string; skipped?: string }>;
+}) {
   await requireAdmin();
+
+  const { generated, skipped } = await searchParams;
 
   const invoices = await prisma.invoice.findMany({
     orderBy: { dueDate: "desc" },
@@ -18,12 +24,34 @@ export default async function AdminInvoicesPage() {
 
   return (
     <div>
-      <h1 className="h3 mb-4">Invoices</h1>
+      <div className="d-flex justify-content-between align-items-center mb-4">
+        <h1 className="h3 mb-0">Invoices</h1>
+        <Link href="/admin/invoices/generate" className="btn btn-dark btn-sm">
+          Generate Invoices
+        </Link>
+      </div>
+
+      {generated !== undefined && (
+        <div className="alert alert-success mb-4">
+          <strong>
+            {generated} invoice{Number(generated) !== 1 ? "s" : ""} created.
+          </strong>
+          {Number(skipped) > 0 && (
+            <span className="text-muted ms-2">
+              {skipped} tenant{Number(skipped) !== 1 ? "s" : ""} already had an
+              invoice for that period and were skipped.
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="card shadow-sm">
         <div className="card-body p-0">
           {invoices.length === 0 ? (
             <div className="px-3 py-5 text-center text-muted small">
-              No invoices yet. Generate invoices for each billing period from the tenant detail page.
+              No invoices yet. Use{" "}
+              <Link href="/admin/invoices/generate">Generate Invoices</Link> to
+              create invoices for a billing period.
             </div>
           ) : (
             <table className="table table-hover mb-0">
